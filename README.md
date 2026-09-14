@@ -3,7 +3,6 @@
 Basket da strada 2 contro 2 in 3D, dentro il browser. Nessuna installazione,
 nessuna dipendenza esterna: tutto il gioco sta in un unico file HTML.
 
-**Gioca: <https://sp0pex.github.io/blacktop-showdown/>**
 
 ## Regole del campetto
 
@@ -28,16 +27,7 @@ quando entra nel verde.
 Il gioco riconosce da solo con cosa stai giocando e cambia i comandi quando
 passi dal touch alla tastiera.
 
-## Dettagli tecnici
 
-- **Three.js r128** incorporato nel file (licenza MIT)
-- Font Bungee e Barlow incorporati come woff2 in base64 (licenza SIL OFL)
-- **Zero richieste di rete** a runtime: funziona anche offline, aperto dal disco
-- Tre livelli di qualita grafica scelti in base al dispositivo, con riduzione
-  automatica del carico se il frame rate scende
-- Texture di campo, murale e pallone generate proceduralmente su canvas
-- Personaggi animati proceduralmente: corsa, palleggio, tiro, schiacciata,
-  posizione difensiva
 
 ## Licenza
 
