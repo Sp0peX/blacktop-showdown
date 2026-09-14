@@ -8,10 +8,11 @@
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%F0%9F%8F%80%3C/text%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%F0%9F%8F%80%3C/text%3E%3C/svg%3E">
+<link rel="preload" as="audio" href="music.mp3">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://sp0pex.github.io/blacktop-showdown/">
 <meta property="og:title" content="Blacktop Showdown">
-<meta property="og:description" content="Basket da strada 2 contro 2 in 3D, con colonna sonora boom bap generata dal browser. Si gioca da PC e da telefono.">
+<meta property="og:description" content="Basket da strada 2 contro 2 in 3D, con musica e modalita Showdown. Si gioca da PC e da telefono.">
 <meta property="og:locale" content="it_IT">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Blacktop Showdown">
@@ -186,6 +187,16 @@ h1{font-family:var(--disp);font-size:clamp(38px,8.2vw,86px);line-height:.86;marg
 .stat{display:grid;gap:2px}
 .snum{font-family:var(--disp);font-size:30px;font-variant-numeric:tabular-nums}
 .slab{font-family:var(--cond);font-size:11px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase}
+
+.vol{display:flex;align-items:center;gap:10px;font-family:var(--cond);font-size:12px;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--dim);font-weight:700}
+.vol input[type=range]{-webkit-appearance:none;appearance:none;width:110px;height:4px;
+  background:var(--line);border-radius:2px;outline:none;cursor:pointer}
+.vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:16px;height:16px;border-radius:50%;background:var(--sun);border:0;cursor:pointer}
+.vol input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;
+  background:var(--sun);border:0;cursor:pointer}
+.vol input[type=range]:focus-visible{outline:2px solid var(--sun);outline-offset:4px}
 
 #btnMus{position:absolute;left:calc(16px + env(safe-area-inset-left,0px));
   top:calc(16px + env(safe-area-inset-top,0px));width:38px;height:38px;border-radius:50%;
@@ -430,6 +441,7 @@ body.touch.portrait #rotate{display:grid}
         <button class="play" id="btnPlay" type="button"><span>Scendi in campo</span></button>
         <button class="ghost tog" id="togMusic" type="button" aria-pressed="true"><span class="tgl">&#9834; Musica</span></button>
         <button class="ghost tog" id="togSfx" type="button" aria-pressed="true"><span class="tgl">Effetti</span></button>
+        <label class="vol"><span>Volume</span><input id="volRange" type="range" min="0" max="100" value="85" aria-label="Volume musica"></label>
         <span class="fine" id="fineNote">Hai uno schermo touch? Toccalo e i comandi mobile compaiono da soli.</span>
       </div>
     </div>
@@ -587,9 +599,10 @@ const Snd=(function(){
    Boom bap loop synthesised at runtime: 90 BPM, swung 16ths, A minor,
    four bars of Am7 / Fmaj7 / Cmaj7 / E7. No audio files, no network.   */
 const Music=(function(){
-  let ctx=null,bus=null,lp=null,keysBus=null,melBus=null,NOISE=null;
-  let timer=null,on=true,running=false;
+  let ctx=null,bus=null,mix=null,trackG=null,lp=null,keysBus=null,melBus=null,NOISE=null;
+  let timer=null,on=true,running=false,trackLive=false,vol=.85;
   let step=0,nextT=0;
+  const TRACK='music.mp3';
   const BPM=90, S16=(60/BPM)/4, SWING=S16*0.17, LOOK=.16;
 
   // one noise buffer, reused by every hit
@@ -687,6 +700,55 @@ const Music=(function(){
     s.connect(f); f.connect(g); g.connect(bus); s.start(t); s.stop(t+.05);
   }
 
+  /* ---- the mp3: decoded once, then looped sample-accurately ----
+     The synthesised loop plays from the first frame so the court is never
+     silent while this downloads; when the buffer is ready the two cross-fade.
+     If anything fails (offline, file://, a blocking CSP) the synth just stays. */
+  function handoff(buf){
+    if(trackLive||!running)return;
+    trackLive=true;
+    const t=ctx.currentTime, FADE=1.6;
+    const src=ctx.createBufferSource();
+    src.buffer=buf; src.loop=true; src.connect(trackG); src.start(t);
+    trackG.gain.setValueAtTime(0,t);
+    trackG.gain.linearRampToValueAtTime(.62,t+FADE);
+    bus.gain.setValueAtTime(bus.gain.value,t);
+    bus.gain.linearRampToValueAtTime(0,t+FADE);
+    setTimeout(function(){if(timer){clearInterval(timer);timer=null;}},(FADE+.4)*1000);
+  }
+  function elementFallback(){
+    // some contexts refuse fetch but still stream media
+    try{
+      const a=new Audio(TRACK);
+      a.loop=true; a.crossOrigin='anonymous';
+      a.addEventListener('canplay',function(){
+        if(trackLive||!running)return;
+        trackLive=true;
+        const t=ctx.currentTime, FADE=1.6;
+        ctx.createMediaElementSource(a).connect(trackG);
+        a.play();
+        trackG.gain.setValueAtTime(0,t);
+        trackG.gain.linearRampToValueAtTime(.62,t+FADE);
+        bus.gain.setValueAtTime(bus.gain.value,t);
+        bus.gain.linearRampToValueAtTime(0,t+FADE);
+        setTimeout(function(){if(timer){clearInterval(timer);timer=null;}},(FADE+.4)*1000);
+      },{once:true});
+      a.load();
+    }catch(e){}
+  }
+  function loadTrack(){
+    if(!window.fetch){elementFallback();return;}
+    fetch(TRACK).then(function(r){
+      if(!r.ok)throw new Error('http '+r.status);
+      return r.arrayBuffer();
+    }).then(function(ab){
+      return new Promise(function(res,rej){
+        const p=ctx.decodeAudioData(ab,res,rej);   // promise on modern browsers, callback on old ones
+        if(p&&p.then)p.then(res,rej);
+      });
+    }).then(handoff).catch(function(){elementFallback();});
+  }
+
   /* ---- scheduler: look ahead so the groove never drifts ---- */
   function schedule(i,t){
     const bar=(i>>4)&3, st=i&15, ch=CH[bar];
@@ -716,10 +778,13 @@ const Music=(function(){
       ctx=nodes.ctx;
       NOISE=makeNoise();
       lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=20000;
-      bus=ctx.createGain(); bus.gain.value=on?.30:0;
+      mix=ctx.createGain(); mix.gain.value=on?vol:0;          // music master
+      bus=ctx.createGain(); bus.gain.value=.30;               // synthesised loop
+      trackG=ctx.createGain(); trackG.gain.value=0;           // the mp3, once it is ready
       keysBus=ctx.createBiquadFilter(); keysBus.type='lowpass'; keysBus.frequency.value=1500;
       melBus=ctx.createBiquadFilter(); melBus.type='lowpass'; melBus.frequency.value=2400;
-      keysBus.connect(bus); melBus.connect(bus); bus.connect(lp); lp.connect(nodes.master);
+      keysBus.connect(bus); melBus.connect(bus);
+      bus.connect(mix); trackG.connect(mix); mix.connect(lp); lp.connect(nodes.master);
       // vinyl floor
       const v=noiseSrc(.5); v.loop=true;
       const vf=ctx.createBiquadFilter(); vf.type='highpass'; vf.frequency.value=3400;
@@ -727,26 +792,35 @@ const Music=(function(){
       v.connect(vf); vf.connect(vg); vg.connect(bus); v.start();
       step=0; nextT=ctx.currentTime+.08; running=true;
       timer=setInterval(tick,25); tick();
+      loadTrack();          // the synth covers the wait, then hands over
     },
     set:function(v){
       on=v;
-      if(bus){const t=ctx.currentTime;
-        bus.gain.cancelScheduledValues(t);
-        bus.gain.setValueAtTime(bus.gain.value,t);
-        bus.gain.linearRampToValueAtTime(v?.30:0,t+.25);}
+      if(mix){const t=ctx.currentTime;
+        mix.gain.cancelScheduledValues(t);
+        mix.gain.setValueAtTime(mix.gain.value,t);
+        mix.gain.linearRampToValueAtTime(v?vol:0,t+.25);}
+    },
+    volume:function(x){
+      vol=clamp(x,0,1);
+      if(mix&&on){const t=ctx.currentTime;
+        mix.gain.cancelScheduledValues(t);
+        mix.gain.setValueAtTime(mix.gain.value,t);
+        mix.gain.linearRampToValueAtTime(vol,t+.08);}
     },
     isOn:function(){return on;},
+    usingTrack:function(){return trackLive;},
     // Showdown: pull the whole loop underwater, then let it back up
     duck:function(deep){
-      if(!lp||!bus)return;
+      if(!lp||!mix)return;
       const t=ctx.currentTime;
       lp.frequency.cancelScheduledValues(t);
       lp.frequency.setValueAtTime(lp.frequency.value,t);
       lp.frequency.exponentialRampToValueAtTime(deep?520:20000,t+(deep?.35:.8));
       if(on){
-        bus.gain.cancelScheduledValues(t);
-        bus.gain.setValueAtTime(bus.gain.value,t);
-        bus.gain.linearRampToValueAtTime(deep?.20:.30,t+.3);
+        mix.gain.cancelScheduledValues(t);
+        mix.gain.setValueAtTime(mix.gain.value,t);
+        mix.gain.linearRampToValueAtTime(deep?vol*.62:vol,t+.3);
       }
     }
   };
@@ -1556,6 +1630,8 @@ pickGroup('archOpts','arch',function(v){S.arch=v;});
 function pref(k,d){try{const v=localStorage.getItem(k);return v===null?d:v==='1';}catch(e){return d;}}
 function savePref(k,v){try{localStorage.setItem(k,v?'1':'0');}catch(e){}}
 let musicOn=pref('bs_music',true), sfxOn=pref('bs_sfx',true);
+let musVol=(function(){try{const v=localStorage.getItem('bs_vol');
+  return v===null?85:clamp(parseInt(v,10)||0,0,100);}catch(e){return 85;}})();
 function syncAudioUI(){
   const m=document.getElementById('togMusic'),f=document.getElementById('togSfx'),
         b=document.getElementById('btnMus');
@@ -1569,6 +1645,15 @@ function toggleSfx(){sfxOn=!sfxOn;savePref('bs_sfx',sfxOn);Snd.set(sfxOn);syncAu
 document.getElementById('togMusic').addEventListener('click',toggleMusic);
 document.getElementById('togSfx').addEventListener('click',toggleSfx);
 document.getElementById('btnMus').addEventListener('click',toggleMusic);
+(function(){
+  const r=document.getElementById('volRange');
+  r.value=musVol;
+  r.addEventListener('input',function(){
+    musVol=clamp(parseInt(r.value,10)||0,0,100);
+    try{localStorage.setItem('bs_vol',String(musVol));}catch(e){}
+    Music.volume(musVol/100);
+  });
+})();
 syncAudioUI();
 pickGroup('diffOpts','diff',function(v){S.diff=v;});
 document.getElementById('btnPlay').addEventListener('click',startGame);
@@ -1626,7 +1711,7 @@ function looseBall(x,y,z,vx,vy,vz){
 
 function startGame(){
   Snd.init(); goFullscreen();
-  Snd.set(sfxOn); Music.set(musicOn); Music.start(Snd.nodes());
+  Snd.set(sfxOn); Music.volume(musVol/100); Music.set(musicOn); Music.start(Snd.nodes());
   UI.stylemeter.style.setProperty('--sf','0%');
   UI.sdready.classList.add('hidden'); UI.tbSd.classList.remove('ready');
   UI.menu.classList.add('hidden'); UI.result.classList.add('hidden');
