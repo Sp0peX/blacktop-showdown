@@ -11,7 +11,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://sp0pex.github.io/blacktop-showdown/">
 <meta property="og:title" content="Blacktop Showdown">
-<meta property="og:description" content="Basket da strada 2 contro 2 in 3D. Regole da playground, schiacciate, trick e modalita Showdown. Si gioca da PC e da telefono.">
+<meta property="og:description" content="Basket da strada 2 contro 2 in 3D, con colonna sonora boom bap generata dal browser. Si gioca da PC e da telefono.">
 <meta property="og:locale" content="it_IT">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Blacktop Showdown">
@@ -187,6 +187,19 @@ h1{font-family:var(--disp);font-size:clamp(38px,8.2vw,86px);line-height:.86;marg
 .snum{font-family:var(--disp);font-size:30px;font-variant-numeric:tabular-nums}
 .slab{font-family:var(--cond);font-size:11px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase}
 
+#btnMus{position:absolute;left:calc(16px + env(safe-area-inset-left,0px));
+  top:calc(16px + env(safe-area-inset-top,0px));width:38px;height:38px;border-radius:50%;
+  border:1px solid var(--line);background:rgba(17,20,29,.75);color:var(--sun);font-size:16px;
+  display:grid;place-items:center;cursor:pointer;pointer-events:auto;padding:0;line-height:1}
+#btnMus.off{color:var(--dim)}
+#btnMus.off::after{content:"";position:absolute;left:7px;right:7px;height:1px;background:currentColor;
+  transform:rotate(-38deg)}
+#btnMus:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
+.ghost.tog{padding:11px 16px;font-size:12px}
+.ghost.tog[aria-pressed="true"]{color:var(--sun);border-color:rgba(255,176,32,.4)}
+.ghost.tog[aria-pressed="false"]{opacity:.45}
+.ghost.tog[aria-pressed="false"] .tgl{text-decoration:line-through}
+
 /* ---- touch layer ---- */
 #touch{position:absolute;inset:0;z-index:5;pointer-events:none;display:none}
 body.touch #touch{display:block}
@@ -290,6 +303,7 @@ body.touch.portrait #rotate{display:grid}
       <div class="team av"><span class="tscore" id="s2">0</span><span class="tname" id="n2">Rivali</span></div>
     </div>
     <div id="possbar" class="hidden">Porta la palla oltre l'arco</div>
+    <button id="btnMus" type="button" aria-label="Musica attiva, premi per silenziare">&#9834;</button>
 
     <div id="stylewrap">
       <div id="stylemeter"><div id="stylefill"></div></div>
@@ -414,6 +428,8 @@ body.touch.portrait #rotate{display:grid}
 
       <div class="actions">
         <button class="play" id="btnPlay" type="button"><span>Scendi in campo</span></button>
+        <button class="ghost tog" id="togMusic" type="button" aria-pressed="true"><span class="tgl">&#9834; Musica</span></button>
+        <button class="ghost tog" id="togSfx" type="button" aria-pressed="true"><span class="tgl">Effetti</span></button>
         <span class="fine" id="fineNote">Hai uno schermo touch? Toccalo e i comandi mobile compaiono da soli.</span>
       </div>
     </div>
@@ -490,6 +506,9 @@ function sg(v){return Math.max(4,Math.round(v*Q.seg));}
 
 /* ============================ helpers ============================ */
 const V3=THREE.Vector3, clamp=(v,a,b)=>v<a?a:v>b?b:v, lerp=(a,b,t)=>a+(b-a)*t;
+/* Smoothing factor that behaves the same at 30 or 144 fps: the old dt*k form
+   made every ease speed up on fast machines and lag on slow ones. */
+const sm=(rate,dt)=>1-Math.exp(-rate*dt);
 const rnd=(a,b)=>a+Math.random()*(b-a), rint=(a,b)=>Math.floor(rnd(a,b+1));
 const TAU=Math.PI*2;
 function angLerp(a,b,t){let d=((b-a+Math.PI)%TAU+TAU)%TAU-Math.PI;return a+d*t;}
@@ -507,7 +526,7 @@ const G=14.5;
 const Snd=(function(){
   let ctx=null,master=null,crowdGain=null,on=true;
   function init(){
-    if(ctx)return;
+    if(ctx){if(ctx.state==='suspended'&&ctx.resume)ctx.resume();return;}
     const AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
     ctx=new AC(); master=ctx.createGain(); master.gain.value=.55; master.connect(ctx.destination);
     // ambient crowd: filtered noise
@@ -517,6 +536,7 @@ const Snd=(function(){
     const f=ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value=620; f.Q.value=.7;
     crowdGain=ctx.createGain(); crowdGain.gain.value=.035;
     src.connect(f); f.connect(crowdGain); crowdGain.connect(master); src.start();
+    if(ctx.state==='suspended'&&ctx.resume)ctx.resume();
   }
   function env(type,freq,dur,vol,freq2,q){
     if(!ctx||!on)return; const t=ctx.currentTime;
@@ -537,7 +557,12 @@ const Snd=(function(){
     s.connect(f); f.connect(g); g.connect(master); s.start();
   }
   return {
-    init, set(v){on=v;},
+    init,
+    nodes(){return ctx?{ctx:ctx,master:master}:null;},
+    set(v){on=v; if(crowdGain&&ctx){const t=ctx.currentTime;
+      crowdGain.gain.cancelScheduledValues(t);
+      crowdGain.gain.setValueAtTime(crowdGain.gain.value,t);
+      crowdGain.gain.linearRampToValueAtTime(v?.035:0,t+.2);}},
     dribble(){env('sine',110,.12,.16,55);noise(.05,.05,900);},
     swish(){noise(.28,.16,4200,'highpass'); env('sine',520,.22,.05,300);},
     clang(){env('triangle',330,.32,.16,180); noise(.12,.09,2600);},
@@ -548,13 +573,182 @@ const Snd=(function(){
     whistle(){env('square',1700,.34,.1,1500);},
     steal(){env('square',880,.1,.09,1400);noise(.09,.07,3200,'highpass');},
     block(){env('sawtooth',140,.24,.2,70);noise(.14,.12,900);},
-    cheer(big){ if(!crowdGain||!ctx)return; const t=ctx.currentTime;
+    cheer(big){ if(!crowdGain||!ctx||!on)return; const t=ctx.currentTime;
       crowdGain.gain.cancelScheduledValues(t);
       crowdGain.gain.setValueAtTime(crowdGain.gain.value,t);
       crowdGain.gain.linearRampToValueAtTime(big?.30:.14,t+.12);
       crowdGain.gain.exponentialRampToValueAtTime(.035,t+(big?2.4:1.2)); },
     sd(){env('sawtooth',70,1.1,.2,420); env('sine',880,.9,.08,120);},
     buzzer(){env('square',210,1.0,.22,200);}
+  };
+})();
+
+/* ============================ music ============================
+   Boom bap loop synthesised at runtime: 90 BPM, swung 16ths, A minor,
+   four bars of Am7 / Fmaj7 / Cmaj7 / E7. No audio files, no network.   */
+const Music=(function(){
+  let ctx=null,bus=null,lp=null,keysBus=null,melBus=null,NOISE=null;
+  let timer=null,on=true,running=false;
+  let step=0,nextT=0;
+  const BPM=90, S16=(60/BPM)/4, SWING=S16*0.17, LOOK=.16;
+
+  // one noise buffer, reused by every hit
+  function makeNoise(){
+    const len=Math.ceil(ctx.sampleRate*2), b=ctx.createBuffer(1,len,ctx.sampleRate), d=b.getChannelData(0);
+    for(let i=0;i<len;i++)d[i]=Math.random()*2-1;
+    return b;
+  }
+  function noiseSrc(rate){
+    const s=ctx.createBufferSource(); s.buffer=NOISE;
+    s.playbackRate.value=rate||1;
+    return s;
+  }
+
+  /* ---- chords: root for the bass, voicing for the keys ---- */
+  const CH=[
+    {root:55.00, v:[220.00,261.63,329.63,392.00]},   // Am7
+    {root:43.65, v:[174.61,220.00,261.63,329.63]},   // Fmaj7
+    {root:65.41, v:[196.00,246.94,293.66,329.63]},   // Cmaj7
+    {root:41.20, v:[164.81,207.65,246.94,293.66]}    // E7
+  ];
+  const KICK =[[0,6,10],[0,7,10],[0,6,10,14],[0,6,11]];
+  const SNARE=[[4,12],[4,12],[4,12],[4,12,14]];
+  const GHOST=[[7],[3,14],[7],[2]];
+  const MEL=[
+    {b:0,s:2,f:659.25,d:.34},{b:0,s:6,f:587.33,d:.30},{b:0,s:10,f:523.25,d:.55},
+    {b:1,s:4,f:440.00,d:.40},{b:1,s:10,f:523.25,d:.34},
+    {b:2,s:0,f:783.99,d:.30},{b:2,s:3,f:659.25,d:.30},{b:2,s:8,f:587.33,d:.60},
+    {b:3,s:6,f:523.25,d:.34},{b:3,s:12,f:493.88,d:.52}
+  ];
+
+  /* ---- voices ---- */
+  function kick(t,v){
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type='sine';
+    o.frequency.setValueAtTime(118,t);
+    o.frequency.exponentialRampToValueAtTime(38,t+.11);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(v,t+.004);
+    g.gain.exponentialRampToValueAtTime(.0008,t+.34);
+    o.connect(g); g.connect(bus); o.start(t); o.stop(t+.36);
+    const c=ctx.createOscillator(),cg=ctx.createGain();     // beater click
+    c.type='square'; c.frequency.setValueAtTime(1500,t);
+    cg.gain.setValueAtTime(v*.10,t); cg.gain.exponentialRampToValueAtTime(.0006,t+.018);
+    c.connect(cg); cg.connect(bus); c.start(t); c.stop(t+.03);
+  }
+  function snare(t,v){
+    const s=noiseSrc(1), f=ctx.createBiquadFilter(), g=ctx.createGain();
+    f.type='bandpass'; f.frequency.value=1850; f.Q.value=.8;
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(v,t+.003);
+    g.gain.exponentialRampToValueAtTime(.0008,t+.20);
+    s.connect(f); f.connect(g); g.connect(bus); s.start(t); s.stop(t+.24);
+    const o=ctx.createOscillator(),og=ctx.createGain();     // body
+    o.type='triangle'; o.frequency.setValueAtTime(215,t);
+    o.frequency.exponentialRampToValueAtTime(150,t+.09);
+    og.gain.setValueAtTime(v*.45,t); og.gain.exponentialRampToValueAtTime(.0008,t+.13);
+    o.connect(og); og.connect(bus); o.start(t); o.stop(t+.15);
+  }
+  function hat(t,v,open){
+    const d=open?.22:.042;
+    const s=noiseSrc(1.7), f=ctx.createBiquadFilter(), g=ctx.createGain();
+    f.type='highpass'; f.frequency.value=7400;
+    g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(.0006,t+d);
+    s.connect(f); f.connect(g); g.connect(bus); s.start(t); s.stop(t+d+.03);
+  }
+  function bass(t,f,v,dur){
+    const o=ctx.createOscillator(),g=ctx.createGain(),q=ctx.createBiquadFilter();
+    o.type='sine'; o.frequency.setValueAtTime(f,t);
+    q.type='lowpass'; q.frequency.value=240;
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(v,t+.014);
+    g.gain.setValueAtTime(v,t+dur*.55);
+    g.gain.exponentialRampToValueAtTime(.0008,t+dur);
+    o.connect(q); q.connect(g); g.connect(bus); o.start(t); o.stop(t+dur+.03);
+    const h=ctx.createOscillator(),hg=ctx.createGain();     // keeps it audible on phone speakers
+    h.type='triangle'; h.frequency.setValueAtTime(f*2,t);
+    hg.gain.setValueAtTime(v*.16,t); hg.gain.exponentialRampToValueAtTime(.0006,t+dur*.5);
+    h.connect(hg); hg.connect(bus); h.start(t); h.stop(t+dur);
+  }
+  function rhodes(t,f,v,dur,dest){
+    for(let i=0;i<2;i++){
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.type=i?'sine':'triangle';
+      o.frequency.setValueAtTime(f*(i?2.002:1),t);
+      o.detune.value=i?7:-5;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(v*(i?.26:1),t+.014);
+      g.gain.exponentialRampToValueAtTime(.0006,t+dur);
+      o.connect(g); g.connect(dest); o.start(t); o.stop(t+dur+.03);
+    }
+  }
+  function crackle(t){
+    const s=noiseSrc(.6), g=ctx.createGain(), f=ctx.createBiquadFilter();
+    f.type='bandpass'; f.frequency.value=2600+Math.random()*3000; f.Q.value=3;
+    g.gain.setValueAtTime(.05+Math.random()*.05,t);
+    g.gain.exponentialRampToValueAtTime(.0004,t+.03);
+    s.connect(f); f.connect(g); g.connect(bus); s.start(t); s.stop(t+.05);
+  }
+
+  /* ---- scheduler: look ahead so the groove never drifts ---- */
+  function schedule(i,t){
+    const bar=(i>>4)&3, st=i&15, ch=CH[bar];
+    if(KICK[bar].indexOf(st)>=0) kick(t,.85);
+    if(SNARE[bar].indexOf(st)>=0) snare(t,.62);
+    if(GHOST[bar].indexOf(st)>=0) snare(t,.16);
+    if(st%2===0) hat(t,st%4===0?.20:.13,(st===14&&(bar&1)===1));
+    if(KICK[bar].indexOf(st)>=0) bass(t,ch.root*2,.50,S16*2.6);
+    if(st===0) for(let k=0;k<ch.v.length;k++) rhodes(t,ch.v[k],.085,1.30,keysBus);
+    if(st===2||st===9) for(let k=1;k<ch.v.length;k++) rhodes(t,ch.v[k],.055,.42,keysBus);
+    for(let m=0;m<MEL.length;m++) if(MEL[m].b===bar&&MEL[m].s===st)
+      rhodes(t,MEL[m].f,.075,MEL[m].d,melBus);
+    if(Math.random()<.22) crackle(t+Math.random()*S16);
+  }
+  function tick(){
+    if(!running)return;
+    while(nextT < ctx.currentTime + LOOK){
+      schedule(step, nextT + ((step&3)===2?SWING:0));
+      nextT += S16;
+      step = (step+1)&63;
+    }
+  }
+
+  return {
+    start:function(nodes){
+      if(running||!nodes||!nodes.ctx)return;
+      ctx=nodes.ctx;
+      NOISE=makeNoise();
+      lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=20000;
+      bus=ctx.createGain(); bus.gain.value=on?.30:0;
+      keysBus=ctx.createBiquadFilter(); keysBus.type='lowpass'; keysBus.frequency.value=1500;
+      melBus=ctx.createBiquadFilter(); melBus.type='lowpass'; melBus.frequency.value=2400;
+      keysBus.connect(bus); melBus.connect(bus); bus.connect(lp); lp.connect(nodes.master);
+      // vinyl floor
+      const v=noiseSrc(.5); v.loop=true;
+      const vf=ctx.createBiquadFilter(); vf.type='highpass'; vf.frequency.value=3400;
+      const vg=ctx.createGain(); vg.gain.value=.016;
+      v.connect(vf); vf.connect(vg); vg.connect(bus); v.start();
+      step=0; nextT=ctx.currentTime+.08; running=true;
+      timer=setInterval(tick,25); tick();
+    },
+    set:function(v){
+      on=v;
+      if(bus){const t=ctx.currentTime;
+        bus.gain.cancelScheduledValues(t);
+        bus.gain.setValueAtTime(bus.gain.value,t);
+        bus.gain.linearRampToValueAtTime(v?.30:0,t+.25);}
+    },
+    isOn:function(){return on;},
+    // Showdown: pull the whole loop underwater, then let it back up
+    duck:function(deep){
+      if(!lp||!bus)return;
+      const t=ctx.currentTime;
+      lp.frequency.cancelScheduledValues(t);
+      lp.frequency.setValueAtTime(lp.frequency.value,t);
+      lp.frequency.exponentialRampToValueAtTime(deep?520:20000,t+(deep?.35:.8));
+      if(on){
+        bus.gain.cancelScheduledValues(t);
+        bus.gain.setValueAtTime(bus.gain.value,t);
+        bus.gain.linearRampToValueAtTime(deep?.20:.30,t+.3);
+      }
+    }
   };
 })();
 
@@ -1190,6 +1384,7 @@ addEventListener('keydown',function(e){
 addEventListener('keyup',function(e){const k=keymap[e.code];if(!k)return;K[k]=false;onRelease(k);});
 addEventListener('keydown',function(e){
   if(e.code==='Escape'&&S.running&&!S.over){S.paused?resume():pause();}
+  if(e.code==='KeyM'){toggleMusic();}
 });
 addEventListener('blur',function(){for(const k in K)K[k]=false;});
 
@@ -1324,7 +1519,7 @@ const UI={
   shotmark:document.getElementById('shotmark'),sweet:document.getElementById('sweet'),
   calls:document.getElementById('callouts'),flash:document.getElementById('flash')
 };
-const SWEET_LO=.62,SWEET_HI=.86;
+const SWEET_LO=.60,SWEET_HI=.88;
 UI.sweet.style.bottom=(SWEET_LO*100)+'%';
 UI.sweet.style.height=((SWEET_HI-SWEET_LO)*100)+'%';
 const RING_C=2*Math.PI*57;
@@ -1356,6 +1551,25 @@ function pickGroup(sel,attr,cb){
   });
 }
 pickGroup('archOpts','arch',function(v){S.arch=v;});
+
+/* audio preferences, remembered per browser */
+function pref(k,d){try{const v=localStorage.getItem(k);return v===null?d:v==='1';}catch(e){return d;}}
+function savePref(k,v){try{localStorage.setItem(k,v?'1':'0');}catch(e){}}
+let musicOn=pref('bs_music',true), sfxOn=pref('bs_sfx',true);
+function syncAudioUI(){
+  const m=document.getElementById('togMusic'),f=document.getElementById('togSfx'),
+        b=document.getElementById('btnMus');
+  if(m)m.setAttribute('aria-pressed',musicOn?'true':'false');
+  if(f)f.setAttribute('aria-pressed',sfxOn?'true':'false');
+  if(b){b.classList.toggle('off',!musicOn);
+    b.setAttribute('aria-label',musicOn?'Musica attiva, premi per silenziare':'Musica muta, premi per riattivare');}
+}
+function toggleMusic(){musicOn=!musicOn;savePref('bs_music',musicOn);Music.set(musicOn);syncAudioUI();}
+function toggleSfx(){sfxOn=!sfxOn;savePref('bs_sfx',sfxOn);Snd.set(sfxOn);syncAudioUI();}
+document.getElementById('togMusic').addEventListener('click',toggleMusic);
+document.getElementById('togSfx').addEventListener('click',toggleSfx);
+document.getElementById('btnMus').addEventListener('click',toggleMusic);
+syncAudioUI();
 pickGroup('diffOpts','diff',function(v){S.diff=v;});
 document.getElementById('btnPlay').addEventListener('click',startGame);
 document.getElementById('btnAgain').addEventListener('click',startGame);
@@ -1412,6 +1626,7 @@ function looseBall(x,y,z,vx,vy,vz){
 
 function startGame(){
   Snd.init(); goFullscreen();
+  Snd.set(sfxOn); Music.set(musicOn); Music.start(Snd.nodes());
   UI.stylemeter.style.setProperty('--sf','0%');
   UI.sdready.classList.add('hidden'); UI.tbSd.classList.remove('ready');
   UI.menu.classList.add('hidden'); UI.result.classList.add('hidden');
@@ -1458,6 +1673,7 @@ function releaseShot(){
   S.charging=false; UI.shotwrap.classList.add('hidden'); buzz(9);
   const p=me; if(!p.hasBall){p.state='idle';return;}
   const q=shotQuality(S.charge);
+  if(q>.93)say('PERFETTO','#4BE08B',true);
   launchShot(p,q);
 }
 function shotQuality(c){return clamp(1-Math.abs(c-(SWEET_LO+SWEET_HI)/2)/((SWEET_HI-SWEET_LO)/2+.11),0,1);}
@@ -1638,14 +1854,14 @@ function tryShowdown(team){
   if(team===0){UI.stylemeter.style.setProperty('--sf','0%');UI.sdready.classList.add('hidden');
     UI.tbSd.classList.remove('ready');S.stat.sd++;}
   buzz(60);
-  document.body.classList.add('showdown');
+  document.body.classList.add('showdown'); Music.duck(true);
   S.timeScale=.55; flash(.75); shake(.6,.6); Snd.sd(); Snd.cheer(true);
   say('SHOWDOWN','#7C5CFF');
   say(team===0?'IL CAMPO È TUO':'ATTENTO, TOCCA A LORO','#FFB020',true);
 }
 function endShowdown(){
   if(S.sdTeam<0)return;
-  S.sdTeam=-1; S.sdT=0; S.timeScale=1;
+  S.sdTeam=-1; S.sdT=0; S.timeScale=1; Music.duck(false);
   document.body.classList.remove('showdown');
 }
 
@@ -1712,20 +1928,25 @@ function turnover(team){
 /* ============================ movement ============================ */
 function movePlayer(p,dx,dz,sprint,dt){
   const A=p.arch;
-  const mag=Math.hypot(dx,dz);
-  let maxS=(p.hasBall?5.35:5.9)*A.speed;
-  if(sprint)maxS*=1.26;
+  let mag=Math.hypot(dx,dz);
+  if(mag>1){dx/=mag;dz/=mag;mag=1;}            // a half-pushed stick stays a half-push
+  p.sprintT=lerp(p.sprintT||0,sprint?1:0,sm(9,dt));   // sprint eases in instead of snapping
+  let maxS=(p.hasBall?5.5:6.05)*A.speed;
+  maxS*=1+.27*p.sprintT;
   if(!p.isUser)maxS*=DIFF[S.diff].spd;
   if(S.sdTeam===p.team)maxS*=1.16;
   if(p.stun>0)maxS*=.25;
-  if(mag>.01){
+  if(mag>.02)maxS*=clamp(mag,.3,1);
+  if(mag>.02){
     const nx=dx/mag,nz=dz/mag;
-    p.vel.x+=nx*A.acc*dt*(sprint?1.25:1);
-    p.vel.z+=nz*A.acc*dt*(sprint?1.25:1);
-    const want=Math.atan2(nx,nz);
-    p.face=angLerp(p.face,want,clamp(dt*11,0,1));
+    const sp0=Math.hypot(p.vel.x,p.vel.z);
+    // cutting against your own momentum bites harder, so direction changes land at once
+    const dot=sp0>.01?(nx*p.vel.x+nz*p.vel.z)/sp0:1;
+    const acc=A.acc*(1+.30*p.sprintT)*(1+clamp(1-dot,0,2)*.75)*mag;
+    p.vel.x+=nx*acc*dt; p.vel.z+=nz*acc*dt;
+    p.face=angLerp(p.face,Math.atan2(nx,nz),sm(15,dt));
   }
-  const fr=Math.pow(.0016,dt);
+  const fr=Math.pow(mag>.02?.10:.020,dt);      // glide while driving, brake when you let go
   p.vel.x*=fr; p.vel.z*=fr;
   const sp=Math.hypot(p.vel.x,p.vel.z);
   if(sp>maxS){p.vel.x=p.vel.x/sp*maxS;p.vel.z=p.vel.z/sp*maxS;}
@@ -1875,7 +2096,7 @@ function aiUpdate(p,dt){
       dx=tx-p.pos.x; dz=tz-p.pos.z;
       const dd=Math.hypot(dx,dz);
       sprint=dd>2.4;
-      p.face=angLerp(p.face,Math.atan2(mark.pos.x-p.pos.x,mark.pos.z-p.pos.z),clamp(dt*8,0,1));
+      p.face=angLerp(p.face,Math.atan2(mark.pos.x-p.pos.x,mark.pos.z-p.pos.z),sm(9,dt));
       if(mark===h&&dd<1.5&&p.cool<=0&&Math.random()<D.agg*dt*1.6){
         // steal attempt
         p.cool=.9;p.state='steal';p.t=0;
@@ -1913,7 +2134,7 @@ function updateBall(dt){
     if(p.state==='shoot'){
       // ball rides the shooting hand
       const h=handPos(p);
-      ball.pos.lerp(h.add(new V3(0,.12,0)),clamp(dt*26,0,1));
+      ball.pos.lerp(h.add(new V3(0,.12,0)),sm(28,dt));
     }else if(p.state==='dunk'){
       const h=handPos(p); ball.pos.copy(h);
     }else{
@@ -1924,7 +2145,7 @@ function updateBall(dt){
       const bounce=Math.abs(Math.sin(p.anim*1.9));
       const hx=p.pos.x+fx*.42+(-fz)*.42, hz=p.pos.z+fz*.42+(fx)*.42;
       const ty=BALL_R+bounce*(.72+sp*.03);
-      ball.pos.lerp(new V3(hx,ty,hz),clamp(dt*22,0,1));
+      ball.pos.lerp(new V3(hx,ty,hz),sm(24,dt));
       if(bounce<.06&&!p.dribbleLow){p.dribbleLow=true;Snd.dribble();}
       if(bounce>.4)p.dribbleLow=false;
     }
@@ -2041,7 +2262,7 @@ function updateBall(dt){
         const p=players[i];
         const reach=new V3(p.pos.x,p.y+1.25,p.pos.z);
         const d=ball.pos.distanceTo(reach);
-        const jr=p.y>.4?1.5:1.05;
+        const jr=p.y>.4?1.75:1.28;
         if(d<jr&&d<bd){bd=d;best=p;}
       }
       if(best){
@@ -2174,7 +2395,7 @@ function pose(p,dt){
   }
 
   /* ---- apply ---- */
-  const k=clamp(dt*(p.state==='shoot'||p.state==='dunk'?26:17),0,1);
+  const k=sm(p.state==='shoot'||p.state==='dunk'?30:19,dt);
   const L=p.lL,R=p.lR;
   L.hp.rotation.x=lerp(L.hp.rotation.x,T.hipL,k);
   R.hp.rotation.x=lerp(R.hp.rotation.x,T.hipR,k);
@@ -2200,7 +2421,7 @@ function pose(p,dt){
     hy=clamp(Math.max(legHeight(L.hp.rotation.x,L.kn.rotation.x,L.ank.rotation.x),
                       legHeight(R.hp.rotation.x,R.kn.rotation.x,R.ank.rotation.x)),.62,H_HIP);
   }
-  p.hipY=lerp(p.hipY,hy+T.bob,clamp(dt*20,0,1));
+  p.hipY=lerp(p.hipY,hy+T.bob,sm(22,dt));
   p.torso.position.y=p.hipY;
 
   // the head follows the ball
@@ -2216,10 +2437,10 @@ function pose(p,dt){
   p.shadow.scale.set(ss,ss,1);
   p.shadow.material.opacity=clamp(.64-p.y*.075,.08,.64);
   const showMark=(p.isUser)||(p.team===0&&p.hasBall);
-  p.marker.material.opacity=lerp(p.marker.material.opacity,showMark?(p.isUser?.55:.35):0,dt*8);
+  p.marker.material.opacity=lerp(p.marker.material.opacity,showMark?(p.isUser?.55:.35):0,sm(8,dt));
   p.marker.rotation.z+=dt*.8;
   const auraTarget=(S.sdTeam===p.team)?.85:(p.hasBall&&S.style[p.team]>=100?.3:0);
-  p.aura.material.opacity=lerp(p.aura.material.opacity,auraTarget,dt*5);
+  p.aura.material.opacity=lerp(p.aura.material.opacity,auraTarget,sm(5,dt));
   p.aura.material.color.setHex(S.sdTeam===p.team?0x7C5CFF:(p.team===0?0xFF2E63:0x25D0C0));
 }
 /* ============================ per-player tick ============================ */
@@ -2289,8 +2510,10 @@ function updateCamera(dt){
   const fx=focus?focus.pos.x:ball.pos.x;
   const fz=focus?focus.pos.z:ball.pos.z;
   // frame between the action and the hoop
-  const cx=clamp(fx*.42,-3.4,3.4);
-  const cz=clamp(fz*.62+5.2,6.5,15.5);
+  // frame slightly ahead of the ball handler so the camera never trails a drive
+  const lx=fx+(focus?focus.vel.x:0)*.26, lz=fz+(focus?focus.vel.z:0)*.20;
+  const cx=clamp(lx*.42,-3.4,3.4);
+  const cz=clamp(lz*.62+5.2,6.5,15.5);
   let height=8.2, back=10.6, fov=46;
   const d=d2(fx,fz,BASE.x,BASE.z);
   if(d<5.2){height=6.6;back=9.2;fov=52;}
@@ -2298,9 +2521,9 @@ function updateCamera(dt){
   const dunking=players.some(function(p){return p.state==='dunk';});
   if(dunking){height=4.6;back=7.2;fov=62;}
 
-  S.camPos.lerp(new V3(cx,height,cz+back),clamp(dt*(dunking?4.5:2.6),0,1));
-  S.camLook.lerp(new V3(clamp(fx*.5,-3,3)*.5,1.9,lerp(fz,BASE.z,.55)),clamp(dt*3.4,0,1));
-  camera.fov=lerp(camera.fov,fov,clamp(dt*3,0,1)); camera.updateProjectionMatrix();
+  S.camPos.lerp(new V3(cx,height,cz+back),sm(dunking?7:4.2,dt));
+  S.camLook.lerp(new V3(clamp(lx*.5,-3,3)*.5,1.9,lerp(fz,BASE.z,.55)),sm(5.5,dt));
+  camera.fov=lerp(camera.fov,fov,sm(4,dt)); camera.updateProjectionMatrix();
 
   let sx=0,sy=0;
   if(S.shakeT>0){
@@ -2316,6 +2539,8 @@ function updateCamera(dt){
 /* ============================ main loop ============================ */
 const clock=new THREE.Clock();
 let acc=0;
+const FIXED=1/120;
+let simAcc=0;
 function resize(){
   const w=window.innerWidth,h=window.innerHeight;
   renderer.setPixelRatio(Math.min(devicePixelRatio||1,Q.pr));
@@ -2421,7 +2646,7 @@ function step(dt){
   if(S.freeze>0){S.freeze-=dt; dt*=.25;}
   // shot charge
   if(S.charging){
-    S.charge+=S.chargeDir*dt*1.25;
+    S.charge+=S.chargeDir*dt*1.02;
     if(S.charge>=1){S.charge=1;S.chargeDir=-1;}
     if(S.charge<=0){S.charge=0;S.chargeDir=1;}
     if(me.state!=='shoot'){S.charging=false;UI.shotwrap.classList.add('hidden');}
@@ -2462,10 +2687,13 @@ function frame(){
   let dt=Math.min(.048,clock.getDelta());
   adaptQuality(dt);
   if(S.running&&!S.paused&&!S.over&&!S.rotate){
-    const scaled=dt*S.timeScale;
-    step(scaled);
+    // fixed slices: physics and animation stop depending on frame rate
+    simAcc+=dt*S.timeScale;
+    let guard=0;
+    while(simAcc>=FIXED&&guard<10){ step(FIXED); simAcc-=FIXED; guard++; }
+    if(guard>=10)simAcc=0;
     updateHUD();
-  }
+  }else simAcc=0;
   updateFX(dt);
   updateCamera(dt);
   renderer.render(scene,camera);
